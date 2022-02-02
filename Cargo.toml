@@ -8,7 +8,7 @@ repository = 'https://github.com/gautamdhameja/substrate-validator-set'
 
 [dev-dependencies.serde]
 features = ['derive']
-version = '1.0.126'
+version = '1.0'
 
 [dependencies.sp-core]
 default-features = false
