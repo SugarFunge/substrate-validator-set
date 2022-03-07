@@ -20,6 +20,7 @@ use frame_support::{
 	ensure,
 	pallet_prelude::*,
 	traits::{EstimateNextSessionRotation, Get, ValidatorSet, ValidatorSetWithIdentification},
+	BoundedVec,
 };
 use log;
 pub use pallet::*;
@@ -47,6 +48,8 @@ pub mod pallet {
 		/// Minimum number of validators to leave in the validator set during
 		/// auto removal.
 		type MinAuthorities: Get<u32>;
+
+		type MaxAuthorities: Get<u32>;
 	}
 
 	#[pallet::pallet]
@@ -55,15 +58,18 @@ pub mod pallet {
 
 	#[pallet::storage]
 	#[pallet::getter(fn validators)]
-	pub type Validators<T: Config> = StorageValue<_, Vec<T::AccountId>, ValueQuery>;
+	pub type Validators<T: Config> =
+		StorageValue<_, BoundedVec<T::AccountId, T::MaxAuthorities>, ValueQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn approved_validators)]
-	pub type ApprovedValidators<T: Config> = StorageValue<_, Vec<T::AccountId>, ValueQuery>;
+	pub type ApprovedValidators<T: Config> =
+		StorageValue<_, BoundedVec<T::AccountId, T::MaxAuthorities>, ValueQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn validators_to_remove)]
-	pub type OfflineValidators<T: Config> = StorageValue<_, Vec<T::AccountId>, ValueQuery>;
+	pub type OfflineValidators<T: Config> =
+		StorageValue<_, BoundedVec<T::AccountId, T::MaxAuthorities>, ValueQuery>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -169,16 +175,30 @@ pub mod pallet {
 
 impl<T: Config> Pallet<T> {
 	fn initialize_validators(validators: &[T::AccountId]) {
-		assert!(validators.len() > 1, "At least 2 validators should be initialized");
+		assert!(
+			validators.len() as u32 >= T::MinAuthorities::get(),
+			"Initial set of validators must be at least T::MinAuthorities"
+		);
+		assert!(
+			(validators.len() as u32) < (T::MaxAuthorities::get()),
+			"Initial set of validators must be at less than T::MaxAuthorities"
+		);
 		assert!(<Validators<T>>::get().is_empty(), "Validators are already initialized!");
-		<Validators<T>>::put(validators);
+		let validators: BoundedVec<T::AccountId, T::MaxAuthorities> =
+			validators.to_vec().try_into().unwrap();
+		<Validators<T>>::put(validators.clone());
 		<ApprovedValidators<T>>::put(validators);
 	}
 
 	fn do_add_validator(validator_id: T::AccountId) -> DispatchResult {
 		let validator_set: BTreeSet<_> = <Validators<T>>::get().into_iter().collect();
 		ensure!(!validator_set.contains(&validator_id), Error::<T>::Duplicate);
-		<Validators<T>>::mutate(|v| v.push(validator_id.clone()));
+
+		let mut validators = <Validators<T>>::get().to_vec();
+		validators.push(validator_id.clone());
+		let validators: BoundedVec<T::AccountId, T::MaxAuthorities> =
+			validators.to_vec().try_into().unwrap();
+		<Validators<T>>::put(validators);
 
 		Self::deposit_event(Event::ValidatorAdditionInitiated(validator_id.clone()));
 		log::debug!(target: LOG_TARGET, "Validator addition initiated.");
@@ -209,7 +229,13 @@ impl<T: Config> Pallet<T> {
 	fn approve_validator(validator_id: T::AccountId) -> DispatchResult {
 		let approved_set: BTreeSet<_> = <ApprovedValidators<T>>::get().into_iter().collect();
 		ensure!(!approved_set.contains(&validator_id), Error::<T>::Duplicate);
-		<ApprovedValidators<T>>::mutate(|v| v.push(validator_id.clone()));
+
+		let mut validators = <ApprovedValidators<T>>::get().to_vec();
+		validators.push(validator_id.clone());
+		let validators: BoundedVec<T::AccountId, T::MaxAuthorities> =
+			validators.to_vec().try_into().unwrap();
+		<ApprovedValidators<T>>::put(validators);
+
 		Ok(())
 	}
 
@@ -221,7 +247,12 @@ impl<T: Config> Pallet<T> {
 
 	// Adds offline validators to a local cache for removal at new session.
 	fn mark_for_removal(validator_id: T::AccountId) {
-		<OfflineValidators<T>>::mutate(|v| v.push(validator_id));
+		let mut validators = <OfflineValidators<T>>::get().to_vec();
+		validators.push(validator_id.clone());
+		let validators: BoundedVec<T::AccountId, T::MaxAuthorities> =
+			validators.to_vec().try_into().unwrap();
+		<OfflineValidators<T>>::put(validators);
+
 		log::debug!(target: LOG_TARGET, "Offline validator marked for auto removal.");
 	}
 
@@ -242,7 +273,8 @@ impl<T: Config> Pallet<T> {
 		);
 
 		// Clear the offline validator list to avoid repeated deletion.
-		<OfflineValidators<T>>::put(Vec::<T::AccountId>::new());
+		let validators: BoundedVec<T::AccountId, T::MaxAuthorities> = vec![].try_into().unwrap();
+		<OfflineValidators<T>>::put(validators);
 	}
 }
 
@@ -257,7 +289,7 @@ impl<T: Config> pallet_session::SessionManager<T::AccountId> for Pallet<T> {
 
 		log::debug!(target: LOG_TARGET, "New session called; updated validator set provided.");
 
-		Some(Self::validators())
+		Some(Self::validators().to_vec())
 	}
 
 	fn end_session(_end_index: u32) {}

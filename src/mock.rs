@@ -175,16 +175,19 @@ impl frame_system::Config for Test {
 	type SystemWeightInfo = ();
 	type SS58Prefix = ();
 	type OnSetCode = ();
+	type MaxConsumers = frame_support::traits::ConstU32<16>;
 }
 
 parameter_types! {
 	pub const MinAuthorities: u32 = 2;
+	pub const MaxAuthorities: u32 = 64;
 }
 
 impl validator_set::Config for Test {
 	type AddRemoveOrigin = EnsureRoot<Self::AccountId>;
 	type Event = Event;
 	type MinAuthorities = MinAuthorities;
+	type MaxAuthorities = MaxAuthorities;
 }
 
 impl pallet_session::Config for Test {
